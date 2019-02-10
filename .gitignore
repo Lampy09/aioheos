@@ -3,4 +3,5 @@ docs/
 __pycache__/
 .cache/
 /dist/
+env/
 /*.egg-info/

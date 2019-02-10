@@ -10,6 +10,8 @@ from . import aioheosupnp
 
 HEOS_PORT = 1255
 
+SID_FAVORITES = 1028
+
 GET_PLAYERS = 'player/get_players'
 GET_PLAYER_INFO = 'player/get_player_info'
 GET_PLAY_STATE = 'player/get_play_state'
@@ -39,6 +41,8 @@ PLAYER_NOW_PLAYING_PROGRESS = 'event/player_now_playing_progress'
 
 SYSTEM_PRETTIFY = 'system/prettify_json_response'
 SYSTEM_REGISTER_FOR_EVENTS = 'system/register_for_change_events'
+SYSTEM_SIGNIN = 'system/sign_in'
+SYSTEM_SIGNOUT= 'system/sign_out'
 
 class AioHeosException(Exception):
     " AioHeosException class "
@@ -50,8 +54,11 @@ class AioHeosException(Exception):
 class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instance-attributes
     " Asynchronous Heos class "
 
-    def __init__(self, loop, host=None, verbose=False):
+    def __init__(self, loop, host=None, username=None, password=None, verbose=False):
         self._host = host
+        self._logged_in = False
+        self._username = username
+        self._password = password
         self._loop = loop
         self._players = None
         self._play_state = None
@@ -80,6 +87,17 @@ class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instan
         for _ in range(0, 20):
             self.request_players()
             if self.player_id is None:
+                yield from asyncio.sleep(0.5)
+            else:
+                return
+
+    @asyncio.coroutine
+    def ensure_login(self):
+        """ ensure login """
+        # timeout after 20 sec
+        self.login()
+        for _ in range(0, 20):            
+            if not self._logged_in:
                 yield from asyncio.sleep(0.5)
             else:
                 return
@@ -128,6 +146,9 @@ class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instan
             self.request_play_state()
             self.request_volume()
 
+        if self._username is not None:
+            yield from self.ensure_login()
+
     @asyncio.coroutine
     def _connect(self, host, port=HEOS_PORT):
         " connect "
@@ -158,11 +179,19 @@ class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instan
     @staticmethod
     def _parse_message(message):
         " parse message "
-        try:
-            return dict(elem.split('=') for elem in message.split('&'))
-        except ValueError as exc:
-            print('[E] parsing message ({}), {}.'.format(message, exc))
-        return {}
+        if message != None and len(message) > 0:  
+            result = {}  
+            for elem in message.split('&'):
+                parts = elem.split('=')                
+                if (len(parts) == 2):
+                    result[parts[0]]=parts[1]
+                elif(len(parts) == 1):
+                    result[parts[0]] = True
+                else:
+                    print('[E] parsing message ({}).'.format(message))
+            return result           
+        else:
+            return {}
 
     def _dispatcher(self, command, payload):
         " call parser functions "
@@ -183,10 +212,11 @@ class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instan
             PLAYER_STATE_CHANGED: self._parse_player_state_changed,
             PLAYER_NOW_PLAYING_CHANGED: self._parse_player_now_playing_changed,
             PLAYER_NOW_PLAYING_PROGRESS: self._parse_player_now_playing_progress,
-            }
+            SYSTEM_SIGNIN: self._parse_system_signin,
+        }
         commands_ignored = (
             SYSTEM_PRETTIFY,
-            )
+        )
         if command in callbacks.keys():
             callbacks[command](payload)
         elif command in commands_ignored:
@@ -289,9 +319,16 @@ class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instan
         " get players "
         self.send_command(GET_PLAYERS)
 
+    def login(self):
+        " login "
+        self.send_command(SYSTEM_SIGNIN, { 'un': self._username, 'pw': self._password })
+
     def _parse_players(self, payload):
         self._players = payload
         self._player_id = self._players[0]['pid']
+
+    def _parse_system_signin(self, payload, message):
+        self._logged_in = True
 
     @property
     def player_id(self):
@@ -465,9 +502,9 @@ class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instan
         " browse source "
         self.send_command(BROWSE, {'sid': sid, 'range': '0,29'})
 
-    def play_favourite(self, sid, mid):
+    def play_favourite(self, mid):
         " play favourite "
-        self.send_command(PLAY_STREAM, {'pid': self.player_id, 'sid': sid, 'mid': mid})
+        self.send_command(PLAY_STREAM, {'pid': self.player_id, 'sid': SID_FAVORITES, 'mid': mid})
 
     def play_content(self, content, content_type='audio/mpeg'):
         """ play content """

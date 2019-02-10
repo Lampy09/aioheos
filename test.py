@@ -11,18 +11,28 @@ def heos_test(loop):
 
     verbose = True 
     # host = None
-    host = 'HEOS-1'
+    host = '192.168.1.17'
+    username = None
+    password = None
 
-    heos = aioheos.AioHeos(loop, host, verbose=verbose)
+    heos = aioheos.AioHeos(loop, host, username, password, verbose=verbose)
 
     # connect to player
     yield from heos.connect()
 
     heos.request_play_state()
-    heos.request_mute_state()
-    heos.request_volume()
-    heos.set_volume(10)
-    heos.request_groups()
+    # heos.request_mute_state()
+    # heos.request_volume()
+    # heos.set_volume(10)
+    # heos.request_groups()
+    # heos.request_music_sources()
+    # heos.request_browse_source(1028)
+
+    # s25777 Sublime
+    # s75171 538 Dance Department
+    # s45142 Pingiuin Radio
+    # s9067 Sky Radio
+    # heos.play_favourite(1028, 's75171') # 538 Dance Department
 
     # with open('hello.mp3', mode='rb') as fhello:
     #     content = fhello.read()
