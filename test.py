@@ -32,7 +32,7 @@ def heos_test(loop):
     # s75171 538 Dance Department
     # s45142 Pingiuin Radio
     # s9067 Sky Radio
-    # heos.play_favourite(1028, 's75171') # 538 Dance Department
+    # heos.play_favourite('s75171') # 538 Dance Department
 
     # with open('hello.mp3', mode='rb') as fhello:
     #     content = fhello.read()
