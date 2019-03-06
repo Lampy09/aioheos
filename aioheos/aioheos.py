@@ -72,6 +72,7 @@ class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instan
         self._media_title = None
         self._media_image_url = None
         self._media_id = None
+        self._favourites = []
 
         self._verbose = verbose
         self._player_id = None
@@ -144,10 +145,13 @@ class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instan
         if self.player_id:
             self.request_now_playing_media()
             self.request_play_state()
+            self.request_mute_state()
             self.request_volume()
 
         if self._username is not None:
             yield from self.ensure_login()
+
+        self.request_browse_source(SID_FAVORITES)
 
     @asyncio.coroutine
     def _connect(self, host, port=HEOS_PORT):
@@ -193,7 +197,7 @@ class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instan
         else:
             return {}
 
-    def _dispatcher(self, command, payload):
+    def _dispatcher(self, command, message, payload):
         " call parser functions "
         # if self._verbose:
         if self._verbose:
@@ -213,12 +217,14 @@ class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instan
             PLAYER_NOW_PLAYING_CHANGED: self._parse_player_now_playing_changed,
             PLAYER_NOW_PLAYING_PROGRESS: self._parse_player_now_playing_progress,
             SYSTEM_SIGNIN: self._parse_system_signin,
+            BROWSE: self._parse_browse_browse,
         }
         commands_ignored = (
             SYSTEM_PRETTIFY,
         )
+        
         if command in callbacks.keys():
-            callbacks[command](payload)
+            callbacks[command](payload, message)
         elif command in commands_ignored:
             if self._verbose:
                 print('[I] command "{}" is ignored.'.format(command))
@@ -230,22 +236,23 @@ class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instan
         try:
             data_heos = data['heos']
             command = data_heos['command']
+            message = {}
+            if ('message' in data_heos):            
+                if data_heos['message'].startswith('command under process'):
+                    return None
+                message = self._parse_message(data_heos['message'])
             if 'result' in data_heos.keys() and data_heos['result'] == 'fail':
                 raise AioHeosException(data_heos['message'])
             if 'payload' in data.keys():
-                self._dispatcher(command, data['payload'])
+                self._dispatcher(command, message, data['payload'])
             elif 'message' in data_heos.keys():
-                if data_heos['message'] == 'command under process':
-                    return None
-                message = self._parse_message(data_heos['message'])
-                self._dispatcher(command, message)
+                self._dispatcher(command, message, None)
+            elif 'command' in data_heos.keys():
+                self._dispatcher(command, None, None)
             else:
-                raise AioHeosException('No message or payload in reply.')
-        # pylint: disable=bare-except
-        except AioHeosException as exc:
-            raise AioHeosException('Problem parsing ({})'.format(exc))
+                raise AioHeosException('No message or payload in reply. payload: {}'.format(data))
         except:
-            raise AioHeosException('Problem parsing command.')
+            raise AioHeosException('Problem parsing command: {}'.format(data))
 
         return None
 
@@ -323,7 +330,7 @@ class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instan
         " login "
         self.send_command(SYSTEM_SIGNIN, { 'un': self._username, 'pw': self._password })
 
-    def _parse_players(self, payload):
+    def _parse_players(self, payload, message):
         self._players = payload
         self._player_id = self._players[0]['pid']
 
@@ -343,8 +350,8 @@ class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instan
         " request play state "
         self.send_command(GET_PLAY_STATE, {'pid': self.player_id})
 
-    def _parse_play_state(self, payload):
-        self._play_state = payload['state']
+    def _parse_play_state(self, payload, message):
+        self._play_state = message['state']
 
     def get_play_state(self):
         """ get play state """
@@ -354,12 +361,16 @@ class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instan
         " request mute state "
         self.send_command(GET_MUTE_STATE, {'pid': self.player_id})
 
-    def _parse_mute_state(self, payload):
-        self._mute_state = payload['state']
+    def _parse_mute_state(self, payload, message):
+        self._mute_state = message['state']
 
     def get_mute_state(self):
         """ get mute state """
         return self._mute_state
+
+    def get_favourites(self):
+        """ get favourites """
+        return self._favourites
 
     def request_volume(self):
         " request volume "
@@ -374,7 +385,7 @@ class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instan
         self.send_command(SET_VOLUME, {'pid': self.player_id,
                                        'level': volume_level})
 
-    def _parse_volume(self, message):
+    def _parse_volume(self, payload, message):
         self._volume_level = message['level']
 
     def get_volume(self):
@@ -413,7 +424,7 @@ class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instan
         " get playing media "
         self.send_command(GET_NOW_PLAYING_MEDIA, {'pid': self.player_id})
 
-    def _parse_now_playing_media(self, payload):
+    def _parse_now_playing_media(self, payload, message):
         if 'artist' in payload.keys():
             self._media_artist = payload['artist']
         if 'album' in payload.keys():
@@ -511,18 +522,22 @@ class AioHeos(object): # pylint: disable=too-many-public-methods,too-many-instan
         self._loop.create_task(self._upnp.play_content(content, content_type))
         # asyncio.wait([task])
 
-    def _parse_player_volume_changed(self, message):
+    def _parse_player_volume_changed(self, payload, message):
         self._mute_state = message['mute']
         self._volume_level = int(message['level'])
 
-    def _parse_player_state_changed(self, message):
+    def _parse_player_state_changed(self, payload, message):
         self._play_state = message['state']
 
-    def _parse_player_now_playing_changed(self, _): # pylint: disable=invalid-name
+    def _parse_player_now_playing_changed(self, payload, message): # pylint: disable=invalid-name
         " event / now playing changed, request what changed. "
         self.request_now_playing_media()
 
-    def _parse_player_now_playing_progress(self, message): # pylint: disable=invalid-name
+    def _parse_player_now_playing_progress(self, payload, message): # pylint: disable=invalid-name
         self._current_position = int(message['cur_pos'])
         self._current_position_updated_at = datetime.utcnow()
         self._duration = int(message['duration'])
+
+    def _parse_browse_browse(self, payload, message):
+        if (message['sid'] == str(SID_FAVORITES)):
+            self._favourites = payload
